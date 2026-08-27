@@ -45,6 +45,10 @@ jobs:
         if: steps.changes.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
         run: nix build --accept-flake-config --print-build-logs .#t3code-nightly
 
+      - name: Publish updated package
+        if: steps.changes.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
+        run: cachix push crowquillx-t3code-nightly ./result
+
       - name: Pin only the latest build
         if: steps.changes.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
         run: cachix pin crowquillx-t3code-nightly latest ./result --keep-revisions 1
