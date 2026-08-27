@@ -41,6 +41,10 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Validate updated flake
+        if: steps.changes.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
+        run: nix flake check --accept-flake-config --print-build-logs
+
       - name: Build updated package
         if: steps.changes.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
         run: nix build --accept-flake-config --print-build-logs .#t3code-nightly
