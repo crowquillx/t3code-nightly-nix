@@ -1,6 +1,13 @@
 {
   description = "Automatically updated Nix package for T3 Code nightly";
 
+  nixConfig = {
+    extra-substituters = [ "https://crowquillx-t3code-nightly.cachix.org" ];
+    extra-trusted-public-keys = [
+      "crowquillx-t3code-nightly.cachix.org-1:R+Cr24SRF6a4pGwdEhU5RiBzkIEMKlGdLWRQ7aPgef8="
+    ];
+  };
+
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   outputs =
