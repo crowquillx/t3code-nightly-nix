@@ -1,0 +1,62 @@
+name: Update T3 Code nightly
+
+on:
+  schedule:
+    - cron: "23 2,8,14,20 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: t3code-nightly-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@527f17dd63d2d60d3e5552934bc84b9a33a14d11 # v3
+
+      - name: Configure Cachix
+        uses: cachix/cachix-action@3ba601ff5bbb07c7220846facfa2cd81eeee15a1 # v16
+        with:
+          name: crowquillx-t3code-nightly
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+
+      - name: Select latest nightly
+        run: python3 scripts/update.py
+
+      - name: Check for an update
+        id: changes
+        run: |
+          if git diff --quiet -- pkgs/t3code-nightly/pin.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build updated package
+        if: steps.changes.outputs.changed == 'true'
+        run: nix build --accept-flake-config --print-build-logs .#t3code-nightly
+
+      - name: Pin only the latest build
+        if: steps.changes.outputs.changed == 'true'
+        run: cachix pin crowquillx-t3code-nightly latest ./result --keep-revisions 1
+
+      - name: Commit validated update
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          VERSION_FILE: pkgs/t3code-nightly/pin.json
+        run: |
+          version=$(jq -r .version "$VERSION_FILE")
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$VERSION_FILE"
+          git commit -m "chore(t3code): update nightly to $version"
+          git push
