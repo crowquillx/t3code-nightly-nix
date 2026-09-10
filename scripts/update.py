@@ -7,9 +7,12 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import re
 import sys
 import tempfile
+import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -54,17 +57,71 @@ def select_release(releases: list[dict[str, Any]]) -> tuple[str, str]:
     return version, url
 
 
+def github_token() -> str | None:
+    for name in ("GITHUB_TOKEN", "GH_TOKEN"):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return None
+
+
+def github_headers() -> dict[str, str]:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "t3code-nightly-nix-updater",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = github_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _should_send_token(url: str) -> bool:
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    return host == "github.com" or host.endswith(
+        (
+            ".github.com",
+            ".githubusercontent.com",
+            ".githubassets.com",
+            ".blob.core.windows.net",
+            ".objects.githubusercontent.com",
+        )
+    ) or host in ("api.github.com", "objects.githubusercontent.com")
+
+
+def _describe_rate_limit(error: urllib.error.HTTPError) -> str:
+    remaining = error.headers.get("X-RateLimit-Remaining")
+    reset = error.headers.get("X-RateLimit-Reset")
+    retry_after = error.headers.get("Retry-After")
+    detail = f"HTTP Error {error.code}: {error.reason}"
+    try:
+        body = error.read().decode("utf-8", "replace")[:500]
+    except Exception:
+        body = ""
+    if body:
+        detail += f" ({body.strip()})"
+    hints: list[str] = []
+    if remaining is not None:
+        hints.append(f"remaining={remaining}")
+    if reset is not None:
+        hints.append(f"reset={reset}")
+    if retry_after is not None:
+        hints.append(f"retry-after={retry_after}s")
+    if error.code in (403, 429) and not github_token():
+        hints.append("set GITHUB_TOKEN to raise the GitHub API rate limit")
+    if hints:
+        detail += " [" + ", ".join(hints) + "]"
+    return detail
+
+
 def fetch_json(url: str) -> list[dict[str, Any]]:
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "t3code-nightly-nix-updater",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        payload = json.load(response)
+    request = urllib.request.Request(url, headers=github_headers())
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.load(response)
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(f"GitHub releases request failed: {_describe_rate_limit(error)}") from error
     if not isinstance(payload, list):
         raise RuntimeError("GitHub releases response was not a list")
     return payload
@@ -72,13 +129,17 @@ def fetch_json(url: str) -> list[dict[str, Any]]:
 
 def hash_url(url: str) -> str:
     digest = hashlib.sha256()
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "t3code-nightly-nix-updater"},
-    )
-    with urllib.request.urlopen(request, timeout=120) as response:
-        while chunk := response.read(1024 * 1024):
-            digest.update(chunk)
+    headers: dict[str, str] = {"User-Agent": "t3code-nightly-nix-updater"}
+    token = github_token()
+    if token and _should_send_token(url):
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            while chunk := response.read(1024 * 1024):
+                digest.update(chunk)
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(f"nightly asset download failed: {_describe_rate_limit(error)}") from error
     encoded = base64.b64encode(digest.digest()).decode("ascii")
     return f"sha256-{encoded}"
 

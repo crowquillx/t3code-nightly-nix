@@ -30,6 +30,8 @@ jobs:
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
 
       - name: Select latest nightly
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 scripts/update.py
 
       - name: Check for an update
